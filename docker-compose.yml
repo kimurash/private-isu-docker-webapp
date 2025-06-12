@@ -50,8 +50,10 @@ services:
       - "MYSQL_ROOT_HOST=%"
       - "MYSQL_ROOT_PASSWORD=root"
     volumes:
-      - mysql:/var/lib/mysql
+      - mysql_data:/var/lib/mysql
+      - mysql_log:/var/log/mysql
       - ./sql:/docker-entrypoint-initdb.d
+      - ./etc/mysql/my.cnf:/etc/mysql/my.cnf
     ports:
       - "3306:3306"
     networks:
@@ -61,6 +63,18 @@ services:
         limits:
           cpus: "1"
           memory: 1g
+    
+  tools:
+    container_name: private-isu-tools
+    build:
+      context: ./tools
+      dockerfile: Dockerfile
+    depends_on:
+      - mysql
+    networks:
+      - my_network
+    volumes:
+      - mysql_log:/var/log/mysql:ro
 
   memcached:
     container_name: private-isu-memcached
@@ -69,7 +83,8 @@ services:
       - my_network
 
 volumes:
-  mysql:
+  mysql_data:
+  mysql_log:
 
 networks:
   my_network:
