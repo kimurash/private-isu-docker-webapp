@@ -4,10 +4,11 @@ FROM ubuntu:latest
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         ca-certificates \
-        curl && \
+        curl \
         default-mysql-client \
         git \
         percona-toolkit \
+        vim && \
     rm -rf /var/lib/apt/lists/*
 
 # Install alp
