@@ -2,4 +2,4 @@
 
 USE isuconp;
 
-ALTER TABLE `comments` ADD INDEX `post_id_idx` (`post_id`);
+CREATE INDEX IF NOT EXISTS `post_id_idx` ON `comments` (`post_id`);
