@@ -1,15 +1,14 @@
 name: private-isu
 services:
   nginx:
+    image: nginx:1.28
     container_name: private-isu-nginx
-    build:
-      context: ./nginx
-      dockerfile: Dockerfile
     depends_on:
       - app
     volumes:
       - ./etc/nginx/conf.d:/etc/nginx/conf.d
       - ./public:/public
+      - nginx_log:/var/log/nginx/shared
     ports:
       - "80:80"
     networks:
@@ -75,6 +74,7 @@ services:
       - my_network
     volumes:
       - mysql_log:/var/log/mysql:ro
+      - nginx_log:/var/log/nginx/shared:ro
 
   memcached:
     container_name: private-isu-memcached
@@ -85,6 +85,7 @@ services:
 volumes:
   mysql_data:
   mysql_log:
+  nginx_log:
 
 networks:
   my_network:
