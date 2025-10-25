@@ -384,17 +384,21 @@ func getLogout(w http.ResponseWriter, r *http.Request) {
 func getIndex(w http.ResponseWriter, r *http.Request) {
 	me := getSessionUser(r)
 
-	results := []Post{}
-
-	err := db.Select(
-		&results,
-		`
+	// === STEP 1: 投稿と投稿者情報をJOINでまとめて取得 ===
+	var posts []Post
+	err := db.Select(&posts, `
 		SELECT
 			p.id,
 			p.user_id,
 			p.body,
 			p.mime,
-			p.created_at
+			p.created_at,
+			u.id AS `+"`user.id`"+`,
+			u.account_name AS `+"`user.account_name`"+`,
+			u.passhash AS `+"`user.passhash`"+`,
+			u.authority AS `+"`user.authority`"+`,
+			u.del_flg AS `+"`user.del_flg`"+`,
+			u.created_at AS `+"`user.created_at`"+`
 		FROM
 			posts AS p
 		JOIN
@@ -404,24 +408,131 @@ func getIndex(w http.ResponseWriter, r *http.Request) {
 		ORDER BY
 			p.created_at DESC
 		LIMIT ?
-		`,
-		postsPerPage,
-	)
+	`, postsPerPage)
+
 	if err != nil {
 		log.Print(err)
+		http.Error(w, "Internal Server Error", 500)
 		return
 	}
 
-	posts, err := makePosts(results, getCSRFToken(r), false)
-	if err != nil {
-		log.Print(err)
+	if len(posts) == 0 {
+		fmap := template.FuncMap{"imageURL": imageURL}
+		template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
+			getTemplPath("layout.html"),
+			getTemplPath("index.html"),
+			getTemplPath("posts.html"),
+			getTemplPath("post.html"),
+		)).Execute(w, struct {
+			Posts     []Post
+			Me        User
+			CSRFToken string
+			Flash     string
+		}{[]Post{}, me, getCSRFToken(r), getFlash(w, r, "notice")})
 		return
 	}
 
-	fmap := template.FuncMap{
-		"imageURL": imageURL,
+	// === STEP 2: コメント関連情報をまとめて取得 ===
+	postIDs := make([]int, len(posts))
+	for i, p := range posts {
+		postIDs[i] = p.ID
 	}
 
+	// (A) 各投稿のコメント数を一括取得
+	commentCountMap := make(map[int]int)
+	query, args, err := sqlx.In(`
+		SELECT
+			post_id,
+			COUNT(*) AS count
+		FROM
+			comments
+		WHERE
+			post_id IN (?)
+		GROUP BY
+			post_id
+	`, postIDs)
+	if err != nil {
+		log.Print(err)
+		http.Error(w, "Internal Server Error", 500)
+		return
+	}
+
+	var commentCounts []struct {
+		PostID int `db:"post_id"`
+		Count  int `db:"count"`
+	}
+	if err := db.Select(&commentCounts, query, args...); err != nil {
+		log.Print(err)
+		http.Error(w, "Internal Server Error", 500)
+		return
+	}
+
+	for _, cc := range commentCounts {
+		commentCountMap[cc.PostID] = cc.Count
+	}
+
+	// (B) 各投稿の最新3件のコメントと、その投稿者情報を一括取得
+	commentsByPostID := make(map[int][]Comment)
+	query, args, err = sqlx.In(`
+		SELECT
+			id,
+			post_id,
+			user_id,
+			comment,
+			created_at,
+			`+"`user.id`"+`,
+			`+"`user.account_name`"+`,
+			`+"`user.passhash`"+`,
+			`+"`user.authority`"+`,
+			`+"`user.del_flg`"+`,
+			`+"`user.created_at`"+`
+		FROM (
+			SELECT
+				c.*,
+				u.id AS `+"`user.id`"+`,
+				u.account_name AS `+"`user.account_name`"+`,
+				u.passhash AS `+"`user.passhash`"+`,
+				u.authority AS `+"`user.authority`"+`,
+				u.del_flg AS `+"`user.del_flg`"+`,
+				u.created_at AS `+"`user.created_at`"+`,
+				ROW_NUMBER() OVER (PARTITION BY c.post_id ORDER BY c.created_at DESC) AS rn
+			FROM
+				comments AS c
+			JOIN
+				users AS u ON c.user_id = u.id
+			WHERE
+				c.post_id IN (?)
+		) AS ranked_comments
+		WHERE
+			rn <= 3
+		ORDER BY
+			created_at ASC
+	`, postIDs)
+	if err != nil {
+		log.Print(err)
+		http.Error(w, "Internal Server Error", 500)
+		return
+	}
+
+	var comments []Comment
+	if err := db.Select(&comments, query, args...); err != nil {
+		log.Print(err)
+		http.Error(w, "Internal Server Error", 500)
+		return
+	}
+
+	for _, c := range comments {
+		commentsByPostID[c.PostID] = append(commentsByPostID[c.PostID], c)
+	}
+
+	// === STEP 3: 取得した情報を投稿に合体させる ===
+	for i := range posts {
+		posts[i].CommentCount = commentCountMap[posts[i].ID]
+		posts[i].Comments = commentsByPostID[posts[i].ID]
+	}
+
+	// テンプレート実行
+	fmap := template.FuncMap{"imageURL": imageURL}
 	template.Must(template.New("layout.html").Funcs(fmap).ParseFiles(
 		getTemplPath("layout.html"),
 		getTemplPath("index.html"),
